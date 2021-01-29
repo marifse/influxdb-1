@@ -288,13 +288,12 @@ func TestStore_DropConcurrentWriteMultipleShards(t *testing.T) {
 				t.Fatal(err)
 			}
 		}
-
 		err := s.DeleteMeasurement("db0", "cpu")
 		if err != nil {
 			t.Fatal(err)
 		}
 
-		measurements, err := s.MeasurementNames(query.OpenAuthorizer, "db0", nil)
+		measurements, err := s.MeasurementNames(context.Background(), query.OpenAuthorizer, "db0", nil)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -354,7 +353,7 @@ func TestStore_WriteMixedShards(t *testing.T) {
 
 		wg.Wait()
 
-		keys, err := s.TagKeys(nil, []uint64{1, 2}, nil)
+		keys, err := s.TagKeys(context.Background(), nil, []uint64{1, 2}, nil)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -454,7 +453,7 @@ func TestStore_DeleteShard(t *testing.T) {
 		// cpu,serverb=b should be removed from the series file for db0 because
 		// shard 1 was the only owner of that series.
 		// Verify by getting  all tag keys.
-		keys, err := s.TagKeys(nil, []uint64{2}, nil)
+		keys, err := s.TagKeys(context.Background(), nil, []uint64{2}, nil)
 		if err != nil {
 			return err
 		}
@@ -469,7 +468,7 @@ func TestStore_DeleteShard(t *testing.T) {
 
 		// Verify that the same series was not removed from other databases'
 		// series files.
-		if keys, err = s.TagKeys(nil, []uint64{3}, nil); err != nil {
+		if keys, err = s.TagKeys(context.Background(), nil, []uint64{3}, nil); err != nil {
 			return err
 		}
 
@@ -867,7 +866,7 @@ func TestStore_MeasurementNames_Deduplicate(t *testing.T) {
 			`cpu value=3 20`,
 		)
 
-		meas, err := s.MeasurementNames(query.OpenAuthorizer, "db0", nil)
+		meas, err := s.MeasurementNames(context.Background(), query.OpenAuthorizer, "db0", nil)
 		if err != nil {
 			t.Fatalf("unexpected error with MeasurementNames: %v", err)
 		}
@@ -908,7 +907,7 @@ func testStoreCardinalityTombstoning(t *testing.T, store *Store) {
 	}
 
 	// Delete all the series for each measurement.
-	mnames, err := store.MeasurementNames(nil, "db", nil)
+	mnames, err := store.MeasurementNames(context.Background(), nil, "db", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -920,7 +919,7 @@ func testStoreCardinalityTombstoning(t *testing.T, store *Store) {
 	}
 
 	// Estimate the series cardinality...
-	cardinality, err := store.Store.SeriesCardinality("db")
+	cardinality, err := store.Store.SeriesCardinality(context.Background(), "db")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -932,7 +931,7 @@ func testStoreCardinalityTombstoning(t *testing.T, store *Store) {
 
 	// Since all the series have been deleted, all the measurements should have
 	// been removed from the index too.
-	if cardinality, err = store.Store.MeasurementsCardinality("db"); err != nil {
+	if cardinality, err = store.Store.MeasurementsCardinality(context.Background(), "db"); err != nil {
 		t.Fatal(err)
 	}
 
@@ -986,7 +985,7 @@ func testStoreCardinalityUnique(t *testing.T, store *Store) {
 	}
 
 	// Estimate the series cardinality...
-	cardinality, err := store.Store.SeriesCardinality("db")
+	cardinality, err := store.Store.SeriesCardinality(context.Background(), "db")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -997,7 +996,7 @@ func testStoreCardinalityUnique(t *testing.T, store *Store) {
 	}
 
 	// Estimate the measurement cardinality...
-	if cardinality, err = store.Store.MeasurementsCardinality("db"); err != nil {
+	if cardinality, err = store.Store.MeasurementsCardinality(context.Background(), "db"); err != nil {
 		t.Fatal(err)
 	}
 
@@ -1068,7 +1067,7 @@ func testStoreCardinalityDuplicates(t *testing.T, store *Store) {
 	}
 
 	// Estimate the series cardinality...
-	cardinality, err := store.Store.SeriesCardinality("db")
+	cardinality, err := store.Store.SeriesCardinality(context.Background(), "db")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1079,7 +1078,7 @@ func testStoreCardinalityDuplicates(t *testing.T, store *Store) {
 	}
 
 	// Estimate the measurement cardinality...
-	if cardinality, err = store.Store.MeasurementsCardinality("db"); err != nil {
+	if cardinality, err = store.Store.MeasurementsCardinality(context.Background(), "db"); err != nil {
 		t.Fatal(err)
 	}
 
@@ -1137,7 +1136,7 @@ func testStoreCardinalityCompactions(store *Store) error {
 	}
 
 	// Estimate the series cardinality...
-	cardinality, err := store.Store.SeriesCardinality("db")
+	cardinality, err := store.Store.SeriesCardinality(context.Background(), "db")
 	if err != nil {
 		return err
 	}
@@ -1148,7 +1147,7 @@ func testStoreCardinalityCompactions(store *Store) error {
 	}
 
 	// Estimate the measurement cardinality...
-	if cardinality, err = store.Store.MeasurementsCardinality("db"); err != nil {
+	if cardinality, err = store.Store.MeasurementsCardinality(context.Background(), "db"); err != nil {
 		return err
 	}
 
@@ -1230,7 +1229,7 @@ func TestStore_Cardinality_Limit_On_InMem_Index(t *testing.T) {
 	}
 
 	// Get updated series cardinality from store after writing data.
-	cardinality, err := store.Store.SeriesCardinality("db")
+	cardinality, err := store.Store.SeriesCardinality(context.Background(), "db")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1275,7 +1274,7 @@ func TestStore_Sketches(t *testing.T) {
 		}
 
 		// Check measurement cardinality.
-		if sketch, tsketch, err = store.MeasurementsSketches("db"); err != nil {
+		if sketch, tsketch, err = store.MeasurementsSketches(context.Background(), "db"); err != nil {
 			return err
 		}
 
@@ -1329,7 +1328,7 @@ func TestStore_Sketches(t *testing.T) {
 		}
 
 		// Delete half the the measurements data
-		mnames, err := store.MeasurementNames(nil, "db", nil)
+		mnames, err := store.MeasurementNames(context.Background(), nil, "db", nil)
 		if err != nil {
 			return err
 		}
@@ -1462,9 +1461,8 @@ func TestStore_TagValues(t *testing.T) {
 		},
 	}
 
-	var s *Store
-	setup := func(index string) []uint64 { // returns shard ids
-		s = MustOpenStore(index)
+	setup := func(index string) (*Store, []uint64) { // returns shard ids
+		s := MustOpenStore(index)
 
 		fmtStr := `cpu1%[1]d,foo=a,ignoreme=nope,host=tv%[2]d,shard=s%[3]d value=1 %[4]d
 	cpu1%[1]d,host=nofoo value=1 %[4]d
@@ -1489,14 +1487,14 @@ func TestStore_TagValues(t *testing.T) {
 			ids = append(ids, uint64(i))
 			s.MustCreateShardWithData("db0", "rp0", i, genPoints(i)...)
 		}
-		return ids
+		return s, ids
 	}
 
 	for _, example := range examples {
 		for _, index := range tsdb.RegisteredIndexes() {
-			shardIDs := setup(index)
+			s, shardIDs := setup(index)
 			t.Run(example.Name+"_"+index, func(t *testing.T) {
-				got, err := s.TagValues(nil, shardIDs, example.Expr)
+				got, err := s.TagValues(context.Background(), nil, shardIDs, example.Expr)
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -1538,7 +1536,7 @@ func TestStore_Measurements_Auth(t *testing.T) {
 			},
 		}
 
-		names, err := s.MeasurementNames(authorizer, "db0", nil)
+		names, err := s.MeasurementNames(context.Background(), authorizer, "db0", nil)
 		if err != nil {
 			return err
 		}
@@ -1568,7 +1566,7 @@ func TestStore_Measurements_Auth(t *testing.T) {
 			return err
 		}
 
-		if names, err = s.MeasurementNames(authorizer, "db0", nil); err != nil {
+		if names, err = s.MeasurementNames(context.Background(), authorizer, "db0", nil); err != nil {
 			return err
 		}
 
@@ -1625,7 +1623,7 @@ func TestStore_TagKeys_Auth(t *testing.T) {
 			},
 		}
 
-		keys, err := s.TagKeys(authorizer, []uint64{0}, nil)
+		keys, err := s.TagKeys(context.Background(), authorizer, []uint64{0}, nil)
 		if err != nil {
 			return err
 		}
@@ -1660,7 +1658,7 @@ func TestStore_TagKeys_Auth(t *testing.T) {
 			return err
 		}
 
-		if keys, err = s.TagKeys(authorizer, []uint64{0}, nil); err != nil {
+		if keys, err = s.TagKeys(context.Background(), authorizer, []uint64{0}, nil); err != nil {
 			return err
 		}
 
@@ -1723,7 +1721,7 @@ func TestStore_TagValues_Auth(t *testing.T) {
 			},
 		}
 
-		values, err := s.TagValues(authorizer, []uint64{0}, &influxql.BinaryExpr{
+		values, err := s.TagValues(context.Background(), authorizer, []uint64{0}, &influxql.BinaryExpr{
 			Op:  influxql.EQ,
 			LHS: &influxql.VarRef{Val: "_tagKey"},
 			RHS: &influxql.StringLiteral{Val: "host"},
@@ -1763,7 +1761,7 @@ func TestStore_TagValues_Auth(t *testing.T) {
 			return err
 		}
 
-		values, err = s.TagValues(authorizer, []uint64{0}, &influxql.BinaryExpr{
+		values, err = s.TagValues(context.Background(), authorizer, []uint64{0}, &influxql.BinaryExpr{
 			Op:  influxql.EQ,
 			LHS: &influxql.VarRef{Val: "_tagKey"},
 			RHS: &influxql.StringLiteral{Val: "host"},
@@ -1884,7 +1882,7 @@ func TestStore_MeasurementNames_ConcurrentDropShard(t *testing.T) {
 					errC <- nil
 					return
 				default:
-					names, err := s.MeasurementNames(nil, "db0", nil)
+					names, err := s.MeasurementNames(context.Background(), nil, "db0", nil)
 					if err == tsdb.ErrIndexClosing || err == tsdb.ErrEngineClosed {
 						continue // These errors are expected
 					}
@@ -1969,7 +1967,7 @@ func TestStore_TagKeys_ConcurrentDropShard(t *testing.T) {
 					errC <- nil
 					return
 				default:
-					keys, err := s.TagKeys(nil, []uint64{0, 1, 2, 3, 4, 5, 6, 7, 8, 9}, nil)
+					keys, err := s.TagKeys(context.Background(), nil, []uint64{0, 1, 2, 3, 4, 5, 6, 7, 8, 9}, nil)
 					if err == tsdb.ErrIndexClosing || err == tsdb.ErrEngineClosed {
 						continue // These errors are expected
 					}
@@ -2070,7 +2068,7 @@ func TestStore_TagValues_ConcurrentDropShard(t *testing.T) {
 					}
 
 					cond := rewrite.(*influxql.ShowTagValuesStatement).Condition
-					values, err := s.TagValues(nil, []uint64{0, 1, 2, 3, 4, 5, 6, 7, 8, 9}, cond)
+					values, err := s.TagValues(context.Background(), nil, []uint64{0, 1, 2, 3, 4, 5, 6, 7, 8, 9}, cond)
 					if err == tsdb.ErrIndexClosing || err == tsdb.ErrEngineClosed {
 						continue // These errors are expected
 					}
@@ -2132,7 +2130,7 @@ func BenchmarkStore_SeriesCardinality_100_Shards(b *testing.B) {
 
 		b.Run(store.EngineOptions.IndexVersion, func(b *testing.B) {
 			for i := 0; i < b.N; i++ {
-				_, _ = store.SeriesCardinality("db")
+				_, _ = store.SeriesCardinality(context.Background(), "db")
 			}
 		})
 		store.Close()
@@ -2214,8 +2212,7 @@ func BenchmarkStore_TagValues(b *testing.B) {
 		{name: "s=10_m=100_v=1000", shards: 10, measurements: 100, tagValues: 1000},
 	}
 
-	var s *Store
-	setup := func(shards, measurements, tagValues int, index string, useRandom bool) []uint64 { // returns shard ids
+	setup := func(shards, measurements, tagValues int, index string, useRandom bool) (*Store, []uint64) { // returns shard ids
 		s := NewStore(index)
 		if err := s.Open(); err != nil {
 			panic(err)
@@ -2251,13 +2248,7 @@ func BenchmarkStore_TagValues(b *testing.B) {
 			shardIDs = append(shardIDs, uint64(i))
 			s.MustCreateShardWithData("db0", "rp0", i, genPoints(i, useRandom)...)
 		}
-		return shardIDs
-	}
-
-	teardown := func() {
-		if err := s.Close(); err != nil {
-			b.Fatal(err)
-		}
+		return s, shardIDs
 	}
 
 	// SHOW TAG VALUES WITH KEY IN ("host", "shard")
@@ -2296,14 +2287,20 @@ func BenchmarkStore_TagValues(b *testing.B) {
 		for useRand := 0; useRand < 2; useRand++ {
 			for c, condition := range []influxql.Expr{cond1, cond2} {
 				for _, bm := range benchmarks {
-					shardIDs := setup(bm.shards, bm.measurements, bm.tagValues, index, useRand == 1)
+					s, shardIDs := setup(bm.shards, bm.measurements, bm.tagValues, index, useRand == 1)
+					teardown := func() {
+						if err := s.Close(); err != nil {
+							b.Fatal(err)
+						}
+					}
+
 					cnd := "Unfiltered"
 					if c == 0 {
 						cnd = "Filtered"
 					}
 					b.Run("random_values="+fmt.Sprint(useRand == 1)+"_index="+index+"_"+cnd+"_"+bm.name, func(b *testing.B) {
 						for i := 0; i < b.N; i++ {
-							if tvResult, err = s.TagValues(nil, shardIDs, condition); err != nil {
+							if tvResult, err = s.TagValues(context.Background(), nil, shardIDs, condition); err != nil {
 								b.Fatal(err)
 							}
 						}

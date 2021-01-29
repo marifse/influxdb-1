@@ -141,23 +141,22 @@ func (s *Store) WithLogger(log *zap.Logger) {
 }
 
 // Statistics returns statistics for period monitoring.
-func (s *Store) Statistics(tags map[string]string) []models.Statistic {
+func (s *Store) Statistics(ctx context.Context, tags map[string]string) []models.Statistic {
 	s.mu.RLock()
 	shards := s.shardsSlice()
 	s.mu.RUnlock()
-
 	// Add all the series and measurements cardinality estimations.
 	databases := s.Databases()
 	statistics := make([]models.Statistic, 0, len(databases))
 	for _, database := range databases {
 		log := s.Logger.With(logger.Database(database))
-		sc, err := s.SeriesCardinality(database)
+		sc, err := s.SeriesCardinality(ctx, database)
 		if err != nil {
 			log.Info("Cannot retrieve series cardinality", zap.Error(err))
 			continue
 		}
 
-		mc, err := s.MeasurementsCardinality(database)
+		mc, err := s.MeasurementsCardinality(ctx, database)
 		if err != nil {
 			log.Info("Cannot retrieve measurement cardinality", zap.Error(err))
 			continue
@@ -1174,31 +1173,43 @@ func (s *Store) sketchesForDatabase(dbName string, getSketches func(*Shard) (est
 // Cardinality is calculated exactly by unioning all shards' bitsets of series
 // IDs. The result of this method cannot be combined with any other results.
 //
-func (s *Store) SeriesCardinality(database string) (int64, error) {
-	s.mu.RLock()
-	shards := s.filterShards(byDatabase(database))
-	s.mu.RUnlock()
+func (s *Store) SeriesCardinality(ctx context.Context, database string) (int64, error) {
+	select {
+	case <-ctx.Done():
+		return 0, ctx.Err()
+	default:
+		s.mu.RLock()
+		shards := s.filterShards(byDatabase(database))
+		s.mu.RUnlock()
 
-	var setMu sync.Mutex
-	others := make([]*SeriesIDSet, 0, len(shards))
+		var setMu sync.Mutex
+		others := make([]*SeriesIDSet, 0, len(shards))
 
-	s.walkShards(shards, func(sh *Shard) error {
-		index, err := sh.Index()
+		err := s.walkShards(shards, func(sh *Shard) error {
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			default:
+				index, err := sh.Index()
+				if err != nil {
+					return err
+				}
+
+				seriesIDs := index.SeriesIDSet()
+				setMu.Lock()
+				others = append(others, seriesIDs)
+				setMu.Unlock()
+
+				return nil
+			}
+		})
 		if err != nil {
-			return err
+			return 0, err
 		}
-
-		seriesIDs := index.SeriesIDSet()
-		setMu.Lock()
-		others = append(others, seriesIDs)
-		setMu.Unlock()
-
-		return nil
-	})
-
-	ss := NewSeriesIDSet()
-	ss.Merge(others...)
-	return int64(ss.Cardinality()), nil
+		ss := NewSeriesIDSet()
+		ss.Merge(others...)
+		return int64(ss.Cardinality()), nil
+	}
 }
 
 // SeriesSketches returns the sketches associated with the series data in all
@@ -1220,13 +1231,8 @@ func (s *Store) SeriesSketches(database string) (estimator.Sketch, estimator.Ske
 //
 // Cardinality is calculated using a sketch-based estimation. The result of this
 // method cannot be combined with any other results.
-func (s *Store) MeasurementsCardinality(database string) (int64, error) {
-	ss, ts, err := s.sketchesForDatabase(database, func(sh *Shard) (estimator.Sketch, estimator.Sketch, error) {
-		if sh == nil {
-			return nil, nil, errors.New("shard nil, can't get cardinality")
-		}
-		return sh.MeasurementsSketches()
-	})
+func (s *Store) MeasurementsCardinality(ctx context.Context, database string) (int64, error) {
+	ss, ts, err := s.MeasurementsSketches(ctx, database)
 
 	if err != nil {
 		return 0, err
@@ -1239,12 +1245,18 @@ func (s *Store) MeasurementsCardinality(database string) (int64, error) {
 //
 // The returned sketches can be combined with other sketches to provide an
 // estimation across distributed databases.
-func (s *Store) MeasurementsSketches(database string) (estimator.Sketch, estimator.Sketch, error) {
+func (s *Store) MeasurementsSketches(ctx context.Context, database string) (estimator.Sketch, estimator.Sketch, error) {
 	return s.sketchesForDatabase(database, func(sh *Shard) (estimator.Sketch, estimator.Sketch, error) {
-		if sh == nil {
-			return nil, nil, errors.New("shard nil, can't get cardinality")
+		// every iteration, check for timeout.
+		select {
+		case <-ctx.Done():
+			return nil, nil, ctx.Err()
+		default:
+			if sh == nil {
+				return nil, nil, errors.New("shard nil, can't get cardinality")
+			}
+			return sh.MeasurementsSketches()
 		}
-		return sh.MeasurementsSketches()
 	})
 }
 
@@ -1495,7 +1507,7 @@ func (s *Store) WriteToShard(shardID uint64, points []models.Point) error {
 // MeasurementNames returns a slice of all measurements. Measurements accepts an
 // optional condition expression. If cond is nil, then all measurements for the
 // database will be returned.
-func (s *Store) MeasurementNames(auth query.Authorizer, database string, cond influxql.Expr) ([][]byte, error) {
+func (s *Store) MeasurementNames(ctx context.Context, auth query.Authorizer, database string, cond influxql.Expr) ([][]byte, error) {
 	s.mu.RLock()
 	shards := s.filterShards(byDatabase(database))
 	s.mu.RUnlock()
@@ -1515,6 +1527,11 @@ func (s *Store) MeasurementNames(auth query.Authorizer, database string, cond in
 		is.Indexes = append(is.Indexes, index)
 	}
 	is = is.DedupeInmemIndexes()
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	default:
+	}
 	return is.MeasurementNamesByExpr(auth, cond)
 }
 
@@ -1537,7 +1554,7 @@ func (a TagKeysSlice) Swap(i, j int)      { a[i], a[j] = a[j], a[i] }
 func (a TagKeysSlice) Less(i, j int) bool { return a[i].Measurement < a[j].Measurement }
 
 // TagKeys returns the tag keys in the given database, matching the condition.
-func (s *Store) TagKeys(auth query.Authorizer, shardIDs []uint64, cond influxql.Expr) ([]TagKeys, error) {
+func (s *Store) TagKeys(ctx context.Context, auth query.Authorizer, shardIDs []uint64, cond influxql.Expr) ([]TagKeys, error) {
 	if len(shardIDs) == 0 {
 		return nil, nil
 	}
@@ -1610,6 +1627,12 @@ func (s *Store) TagKeys(auth query.Authorizer, shardIDs []uint64, cond influxql.
 	var results []TagKeys
 	for _, name := range names {
 
+		// Check for timeouts
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		default:
+		}
 		// Build keyset over all indexes for measurement.
 		tagKeySet, err := is.MeasurementTagKeysByExpr(name, nil)
 		if err != nil {
@@ -1623,6 +1646,12 @@ func (s *Store) TagKeys(auth query.Authorizer, shardIDs []uint64, cond influxql.
 		// If they have authorized series associated with them.
 		if filterExpr == nil {
 			for tagKey := range tagKeySet {
+				// check for timeouts
+				select {
+				case <-ctx.Done():
+					return nil, ctx.Err()
+				default:
+				}
 				ok, err := is.TagKeyHasAuthorizedSeries(auth, []byte(name), []byte(tagKey))
 				if err != nil {
 					return nil, err
@@ -1703,7 +1732,7 @@ func (a tagValuesSlice) Less(i, j int) bool { return bytes.Compare(a[i].name, a[
 
 // TagValues returns the tag keys and values for the provided shards, where the
 // tag values satisfy the provided condition.
-func (s *Store) TagValues(auth query.Authorizer, shardIDs []uint64, cond influxql.Expr) ([]TagValues, error) {
+func (s *Store) TagValues(ctx context.Context, auth query.Authorizer, shardIDs []uint64, cond influxql.Expr) ([]TagValues, error) {
 	if cond == nil {
 		return nil, errors.New("a condition is required")
 	}
@@ -1792,6 +1821,13 @@ func (s *Store) TagValues(auth query.Authorizer, shardIDs []uint64, cond influxq
 	// values from matching series. Series may be filtered using a WHERE
 	// filter.
 	for _, name := range names {
+		// check for timeouts
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		default:
+		}
+
 		// Determine a list of keys from condition.
 		keySet, err := is.MeasurementTagKeysByExpr(name, cond)
 		if err != nil {
@@ -1854,6 +1890,13 @@ func (s *Store) TagValues(auth query.Authorizer, shardIDs []uint64, cond influxq
 	// instances of tagValues for a given measurement.
 	idxBuf := make([][2]int, 0, len(is.Indexes))
 	for i < len(allResults) {
+		// check for timeouts
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		default:
+		}
+
 		// Gather all occurrences of the same measurement for merging.
 		for j+1 < len(allResults) && bytes.Equal(allResults[j+1].name, allResults[i].name) {
 			j++

@@ -1,6 +1,7 @@
 package run
 
 import (
+	"context"
 	"crypto/tls"
 	"fmt"
 	"io"
@@ -239,7 +240,9 @@ func NewServer(c *Config, buildInfo *BuildInfo) (*Server, error) {
 func (s *Server) Statistics(tags map[string]string) []models.Statistic {
 	var statistics []models.Statistic
 	statistics = append(statistics, s.QueryExecutor.Statistics(tags)...)
-	statistics = append(statistics, s.TSDBStore.Statistics(tags)...)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(s.config.Coordinator.QueryTimeout))
+	defer cancel()
+	statistics = append(statistics, s.TSDBStore.Statistics(ctx, tags)...)
 	statistics = append(statistics, s.PointsWriter.Statistics(tags)...)
 	statistics = append(statistics, s.Subscriber.Statistics(tags)...)
 	for _, srv := range s.Services {
@@ -538,16 +541,18 @@ func (s *Server) reportServer() {
 		numSeries       int64
 	)
 
+	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(s.config.Coordinator.QueryTimeout))
+	defer cancel()
 	for _, db := range dbs {
 		name := db.Name
-		n, err := s.TSDBStore.SeriesCardinality(name)
+		n, err := s.TSDBStore.SeriesCardinality(ctx, name)
 		if err != nil {
 			s.Logger.Error(fmt.Sprintf("Unable to get series cardinality for database %s: %v", name, err))
 		} else {
 			numSeries += n
 		}
 
-		n, err = s.TSDBStore.MeasurementsCardinality(name)
+		n, err = s.TSDBStore.MeasurementsCardinality(ctx, name)
 		if err != nil {
 			s.Logger.Error(fmt.Sprintf("Unable to get measurement cardinality for database %s: %v", name, err))
 		} else {
