@@ -1174,40 +1174,40 @@ func (s *Store) sketchesForDatabase(dbName string, getSketches func(*Shard) (est
 // IDs. The result of this method cannot be combined with any other results.
 //
 func (s *Store) SeriesCardinality(ctx context.Context, database string) (int64, error) {
+	s.mu.RLock()
+	shards := s.filterShards(byDatabase(database))
+	s.mu.RUnlock()
+
+	var setMu sync.Mutex
+	others := make([]*SeriesIDSet, 0, len(shards))
+
+	err := s.walkShards(shards, func(sh *Shard) error {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		default:
+			index, err := sh.Index()
+			if err != nil {
+				return err
+			}
+
+			seriesIDs := index.SeriesIDSet()
+			setMu.Lock()
+			others = append(others, seriesIDs)
+			setMu.Unlock()
+
+			return nil
+		}
+	})
+	if err != nil {
+		return 0, err
+	}
+	ss := NewSeriesIDSet()
+	ss.Merge(others...)
 	select {
 	case <-ctx.Done():
 		return 0, ctx.Err()
 	default:
-		s.mu.RLock()
-		shards := s.filterShards(byDatabase(database))
-		s.mu.RUnlock()
-
-		var setMu sync.Mutex
-		others := make([]*SeriesIDSet, 0, len(shards))
-
-		err := s.walkShards(shards, func(sh *Shard) error {
-			select {
-			case <-ctx.Done():
-				return ctx.Err()
-			default:
-				index, err := sh.Index()
-				if err != nil {
-					return err
-				}
-
-				seriesIDs := index.SeriesIDSet()
-				setMu.Lock()
-				others = append(others, seriesIDs)
-				setMu.Unlock()
-
-				return nil
-			}
-		})
-		if err != nil {
-			return 0, err
-		}
-		ss := NewSeriesIDSet()
-		ss.Merge(others...)
 		return int64(ss.Cardinality()), nil
 	}
 }

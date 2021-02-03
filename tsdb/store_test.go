@@ -1111,6 +1111,115 @@ func TestStore_Cardinality_Duplicates(t *testing.T) {
 	}
 }
 
+func TestStore_Cardinality_Timeout(t *testing.T) {
+	if testing.Short() || os.Getenv("APPVEYOR") != "" {
+		t.Skip("Skipping test in short and appveyor mode.")
+	}
+
+	test := func(index string) {
+		store := NewStore(index)
+		store.EngineOptions.Config.MaxSeriesPerDatabase = 0
+		if err := store.Open(); err != nil {
+			panic(err)
+		}
+		defer store.Close()
+		testStoreCardinalityTimeout(t, store, index)
+	}
+
+	for _, index := range tsdb.RegisteredIndexes() {
+		test(index)
+	}
+}
+
+func testStoreCardinalityTimeout(t *testing.T, store *Store, index string) {
+	const measurementCnt = 512
+	const tagCnt = 5
+	const valueCnt = 5
+	const pointsPerShard = 20000
+	const loopCnt = 10
+	const durationDivisor = 3
+
+	// Generate point data to write to the shards.
+	series := genTestSeries(measurementCnt, tagCnt, valueCnt)
+
+	points := make([]models.Point, 0, len(series))
+	for _, s := range series {
+		points = append(points, models.MustNewPoint(s.Measurement, s.Tags, map[string]interface{}{"value": 1.0}, time.Now()))
+	}
+	// Create requested number of shards in the store & write points across
+	// shards such that we never write the same series to multiple shards.
+	for shardID := 0; shardID < len(points) / pointsPerShard; shardID++ {
+		if err := store.CreateShard("db", "rp", uint64(shardID), true); err != nil {
+			t.Fatalf("create shard: %s", err)
+		}
+		if err := store.BatchWrite(shardID, points[shardID*pointsPerShard:(shardID+1)*pointsPerShard]); err != nil {
+			t.Fatalf("batch write: %s", err)
+		}
+	}
+
+	funcTimer, funcTimeout := makeTimedFuncs(func (ctx context.Context) (string, error) {
+		const funcName = "SeriesCardinality"
+		_, err := store.Store.SeriesCardinality(ctx, "db")
+		if err != nil {
+			return funcName, err
+		} else {
+			return funcName, nil
+		}
+	}, index)
+
+	d := funcTimer(t, loopCnt)
+	funcTimeout(t, d / durationDivisor)
+
+	funcTimer, funcTimeout = makeTimedFuncs(func (ctx context.Context) (string, error) {
+		const funcName = "MeasurementsCardinality"
+		_, err := store.Store.MeasurementsCardinality(ctx, "db")
+		if err != nil {
+			return funcName, err
+		} else {
+			return funcName, nil
+		}
+	}, index)
+
+	d = funcTimer(t, loopCnt)
+	funcTimeout(t, d / durationDivisor)
+}
+
+func makeTimedFuncs(tested func (context.Context) (string, error), index string) (func (*testing.T, int) time.Duration, func (*testing.T, time.Duration)) {
+	timeTested := func(t *testing.T, cnt int) time.Duration {
+		minDuration, err := time.ParseDuration("1000h")
+		if err != nil {
+			t.Fatalf("ParseDuration: %v", err)
+			return time.Duration(0)
+		}
+		for i := 0; i < cnt; i += 1 {
+			st := time.Now()
+			if funcName, err := tested(context.Background()); err != nil {
+				t.Fatalf("%v: %v with index type %v", funcName, err, index)
+				return time.Duration(0)
+			}
+			if d := time.Since(st); d < minDuration {
+				minDuration = d
+			}
+		}
+		return minDuration
+	}
+
+	cancelTested := func (t *testing.T, d time.Duration) {
+		ctx, cancel := context.WithTimeout(context.Background(), d)
+		defer cancel()
+
+		funcName, err := tested(ctx)
+		if err == nil {
+			t.Fatalf("%v: failed to time out at %v with index type %v", funcName, d, index)
+		} else if !strings.Contains(err.Error(), context.DeadlineExceeded.Error()) {
+			t.Fatalf("%v: failed with %v instead of %v with index type %v", funcName, err, context.DeadlineExceeded, index)
+		}
+	}
+	return timeTested, cancelTested
+
+}
+
+
 // Creates a large number of series in multiple shards, which will force
 // compactions to occur.
 func testStoreCardinalityCompactions(store *Store) error {
