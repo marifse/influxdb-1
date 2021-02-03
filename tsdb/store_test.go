@@ -1148,7 +1148,7 @@ func testStoreCardinalityTimeout(t *testing.T, store *Store, index string) {
 	}
 	// Create requested number of shards in the store & write points across
 	// shards such that we never write the same series to multiple shards.
-	for shardID := 0; shardID < len(points) / pointsPerShard; shardID++ {
+	for shardID := 0; shardID < len(points)/pointsPerShard; shardID++ {
 		if err := store.CreateShard("db", "rp", uint64(shardID), true); err != nil {
 			t.Fatalf("create shard: %s", err)
 		}
@@ -1157,7 +1157,7 @@ func testStoreCardinalityTimeout(t *testing.T, store *Store, index string) {
 		}
 	}
 
-	funcTimer, funcTimeout := makeTimedFuncs(func (ctx context.Context) (string, error) {
+	funcTimer, funcTimeout := makeTimedFuncs(func(ctx context.Context) (string, error) {
 		const funcName = "SeriesCardinality"
 		_, err := store.Store.SeriesCardinality(ctx, "db")
 		if err != nil {
@@ -1168,9 +1168,9 @@ func testStoreCardinalityTimeout(t *testing.T, store *Store, index string) {
 	}, index)
 
 	d := funcTimer(t, loopCnt)
-	funcTimeout(t, d / durationDivisor)
+	funcTimeout(t, d/durationDivisor)
 
-	funcTimer, funcTimeout = makeTimedFuncs(func (ctx context.Context) (string, error) {
+	funcTimer, funcTimeout = makeTimedFuncs(func(ctx context.Context) (string, error) {
 		const funcName = "MeasurementsCardinality"
 		_, err := store.Store.MeasurementsCardinality(ctx, "db")
 		if err != nil {
@@ -1181,10 +1181,10 @@ func testStoreCardinalityTimeout(t *testing.T, store *Store, index string) {
 	}, index)
 
 	d = funcTimer(t, loopCnt)
-	funcTimeout(t, d / durationDivisor)
+	funcTimeout(t, d/durationDivisor)
 }
 
-func makeTimedFuncs(tested func (context.Context) (string, error), index string) (func (*testing.T, int) time.Duration, func (*testing.T, time.Duration)) {
+func makeTimedFuncs(tested func(context.Context) (string, error), index string) (func(*testing.T, int) time.Duration, func(*testing.T, time.Duration)) {
 	timeTested := func(t *testing.T, cnt int) time.Duration {
 		minDuration, err := time.ParseDuration("1000h")
 		if err != nil {
@@ -1204,7 +1204,7 @@ func makeTimedFuncs(tested func (context.Context) (string, error), index string)
 		return minDuration
 	}
 
-	cancelTested := func (t *testing.T, d time.Duration) {
+	cancelTested := func(t *testing.T, d time.Duration) {
 		ctx, cancel := context.WithTimeout(context.Background(), d)
 		defer cancel()
 
@@ -1218,7 +1218,6 @@ func makeTimedFuncs(tested func (context.Context) (string, error), index string)
 	return timeTested, cancelTested
 
 }
-
 
 // Creates a large number of series in multiple shards, which will force
 // compactions to occur.

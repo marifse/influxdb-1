@@ -2,6 +2,7 @@ package tsdb // import "github.com/influxdata/influxdb/tsdb"
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"io"
