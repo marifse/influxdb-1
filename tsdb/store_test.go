@@ -1111,7 +1111,7 @@ func TestStore_Cardinality_Duplicates(t *testing.T) {
 	}
 }
 
-func TestStore_Cardinality_Timeout(t *testing.T) {
+func TestStore_MetaQuery_Timeout(t *testing.T) {
 	if testing.Short() || os.Getenv("APPVEYOR") != "" {
 		t.Skip("Skipping test in short and appveyor mode.")
 	}
@@ -1123,7 +1123,7 @@ func TestStore_Cardinality_Timeout(t *testing.T) {
 			panic(err)
 		}
 		defer store.Close()
-		testStoreCardinalityTimeout(t, store, index)
+		testStoreMetaQueryTimeout(t, store, index)
 	}
 
 	for _, index := range tsdb.RegisteredIndexes() {
@@ -1131,13 +1131,16 @@ func TestStore_Cardinality_Timeout(t *testing.T) {
 	}
 }
 
-func testStoreCardinalityTimeout(t *testing.T, store *Store, index string) {
-	const measurementCnt = 512
+func testStoreMetaQueryTimeout(t *testing.T, store *Store, index string) {
+	const measurementCnt = 256
 	const tagCnt = 5
 	const valueCnt = 5
 	const pointsPerShard = 20000
+	// Number of times to run the test to get a timing base
 	const loopCnt = 10
-	const durationDivisor = 3
+	// Divisor for the minimum duration recorded in loopCnt runs of the test
+	// The minimum duration divided by this will be the timeout period.
+	const durationDivisor = 3.0
 
 	// Generate point data to write to the shards.
 	series := genTestSeries(measurementCnt, tagCnt, valueCnt)
@@ -1157,7 +1160,7 @@ func testStoreCardinalityTimeout(t *testing.T, store *Store, index string) {
 		}
 	}
 
-	funcTimer, funcTimeout := makeTimedFuncs(func(ctx context.Context) (string, error) {
+	funcTimer, funcTimeout := testStoreMakeTimedFuncs(func(ctx context.Context) (string, error) {
 		const funcName = "SeriesCardinality"
 		_, err := store.Store.SeriesCardinality(ctx, "db")
 		if err != nil {
@@ -1170,7 +1173,7 @@ func testStoreCardinalityTimeout(t *testing.T, store *Store, index string) {
 	d := funcTimer(t, loopCnt)
 	funcTimeout(t, d/durationDivisor)
 
-	funcTimer, funcTimeout = makeTimedFuncs(func(ctx context.Context) (string, error) {
+	funcTimer, funcTimeout = testStoreMakeTimedFuncs(func(ctx context.Context) (string, error) {
 		const funcName = "MeasurementsCardinality"
 		_, err := store.Store.MeasurementsCardinality(ctx, "db")
 		if err != nil {
@@ -1182,9 +1185,26 @@ func testStoreCardinalityTimeout(t *testing.T, store *Store, index string) {
 
 	d = funcTimer(t, loopCnt)
 	funcTimeout(t, d/durationDivisor)
+
+	shards := make([]uint64, len(points)/pointsPerShard)
+	for i, _ := range shards {
+		shards[i] = uint64(i)
+	}
+	funcTimer, funcTimeout = testStoreMakeTimedFuncs(func(ctx context.Context) (string, error) {
+		const funcName = "TagValues"
+		_, err := store.Store.TagValues(ctx, nil, shards, testStoreTagValueCondition())
+		if err != nil {
+			return funcName, err
+		} else {
+			return funcName, nil
+		}
+	}, index)
+
+	d = funcTimer(t, loopCnt)
+	funcTimeout(t, time.Duration(float64(d)/durationDivisor))
 }
 
-func makeTimedFuncs(tested func(context.Context) (string, error), index string) (func(*testing.T, int) time.Duration, func(*testing.T, time.Duration)) {
+func testStoreMakeTimedFuncs(tested func(context.Context) (string, error), index string) (func(*testing.T, int) time.Duration, func(*testing.T, time.Duration)) {
 	timeTested := func(t *testing.T, cnt int) time.Duration {
 		minDuration, err := time.ParseDuration("1000h")
 		if err != nil {
@@ -1217,6 +1237,51 @@ func makeTimedFuncs(tested func(context.Context) (string, error), index string) 
 	}
 	return timeTested, cancelTested
 
+}
+
+func testStoreTagValueCondition() influxql.Expr {
+	RHSAll := &influxql.ParenExpr{
+		Expr: &influxql.BinaryExpr{
+			Op: influxql.OR,
+			LHS: &influxql.BinaryExpr{
+				Op:  influxql.EQ,
+				LHS: &influxql.VarRef{Val: "_tagKey"},
+				RHS: &influxql.StringLiteral{Val: "tagKey4"},
+			},
+			RHS: &influxql.BinaryExpr{
+				Op:  influxql.EQ,
+				LHS: &influxql.VarRef{Val: "_tagKey"},
+				RHS: &influxql.StringLiteral{Val: "tagKey5"},
+			},
+		},
+	}
+
+	RHSWhere := &influxql.ParenExpr{
+		Expr: &influxql.BinaryExpr{
+			Op: influxql.AND,
+			LHS: &influxql.ParenExpr{
+				Expr: &influxql.BinaryExpr{
+					Op:  influxql.EQ,
+					LHS: &influxql.VarRef{Val: "tagKey1"},
+					RHS: &influxql.StringLiteral{Val: "tagValue2"},
+				},
+			},
+			RHS: RHSAll,
+		},
+	}
+
+	base := &influxql.BinaryExpr{
+		Op: influxql.AND,
+		LHS: &influxql.ParenExpr{
+			Expr: &influxql.BinaryExpr{
+				Op:  influxql.EQREGEX,
+				LHS: &influxql.VarRef{Val: "tagKey3"},
+				RHS: &influxql.RegexLiteral{Val: regexp.MustCompile(`tagValue\d`)},
+			},
+		},
+		RHS: RHSWhere,
+	}
+	return base
 }
 
 // Creates a large number of series in multiple shards, which will force
